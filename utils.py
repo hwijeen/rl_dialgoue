@@ -9,15 +9,14 @@ from dataloading import EOS_IDX, SOS_IDX, UNK_IDX, PAD_IDX
 logger = logging.getLogger(__name__)
 
 ### data related
-# TODO: this is wrong
 def truncate(x, token=None):
     # delete a special token in a batch
-    assert token in ['sos', 'eos', 'both'], 'can only truncate sos or eos'
+    assert token in ['sos', 'eos'], 'can only truncate sos or eos'
     x, lengths = x # (B, L)
     lengths = lengths - 1
     if token == 'sos': x = x[:, 1:]
     elif token == 'eos': x = x[:, :-1]
-    else: x = x[:, 1:-1]
+        # x[x==EOS_IDX] = PAD_IDX # unnecessary when ignore_index is set
     return (x, lengths)
 
 def append(x, token=None):
@@ -34,7 +33,23 @@ def append(x, token=None):
         x = torch.cat([sos, x], dim=1)
     return (x, lengths)
 
-# TODO: some examples may not have EOS at all
+def sequence_mask(lengths):
+    # make a mask matrix corresponding to given length
+    # from https://github.com/tensorflow/tensorflow/blob/r1.12/tensorflow/python/ops/array_ops.py
+    row_vector = torch.arange(0, max(lengths), device=lengths.device) # (L,)
+    matrix = lengths.unsqueeze(-1) # (B, 1)
+    result = row_vector < matrix # 1 for real tokens
+    return result # (B, L)
+
+def sort_by_length(y, lengths):
+    # sort hy, y in decreasing order(for compatibility with packed_sequence)
+    l = [(sent, l) for sent, l in zip(y, lengths)]
+    sorted_l = sorted(l, key=lambda x: x[1], reverse=True)
+    h = torch.stack([i[0] for i in sorted_l], dim=0)
+    lengths = torch.stack([i[1] for i in sorted_l], dim=0)
+    return h, lengths
+
+# DEBUG: edge case - batch wioutout eos token??
 def get_actual_lengths(y):
     # get actual length of a generated batch considering eos
     non_zeros = (y == EOS_IDX).nonzero()
@@ -48,13 +63,26 @@ def get_actual_lengths(y):
             lengths.append(j+1) # zero-index
     return torch.tensor(lengths, device=non_zeros.device)
 
-def sort_by_length(y, lengths):
-    # sort hy, y in decreasing order(for compatibility with packed_sequence)
-    l = [(tok, l) for tok, l in zip(y, lengths)]
-    sorted_l = sorted(l, key=lambda x: x[1], reverse=True)
-    h = torch.stack([i[0] for i in sorted_l], dim=0)
-    lengths = torch.stack([i[1] for i in sorted_l], dim=0)
-    return h, lengths
+def tighten(y):
+    """
+    pad tokens after EOS and mask hiddens after EOS
+    y: (B, MAXLEN+1)
+    """
+
+    lengths = get_actual_lengths(y)
+    mask = sequence_mask(lengths)
+    y = y[:, :mask.size(1)]  # truncate unnecessarily generated part
+    y.masked_fill_((mask != 1), PAD_IDX)  # this does not backprop
+    y, lengths = sort_by_length(y, lengths)
+    return y, lengths
+
+#def sort_by_length(y, lengths):
+#    # sort hy, y in decreasing order(for compatibility with packed_sequence)
+#    l = [(tok, l) for tok, l in zip(y, lengths)]
+#    sorted_l = sorted(l, key=lambda x: x[1], reverse=True)
+#    h = torch.stack([i[0] for i in sorted_l], dim=0)
+#    lengths = torch.stack([i[1] for i in sorted_l], dim=0)
+#    return h, lengths
 
 def reverse(batch, vocab):
     # turn a batch of idx to tokens
@@ -66,33 +94,9 @@ def reverse(batch, vocab):
                 break
             sentence.append(w)
         return sentence
-    # batch = [trim(ex, EOS_IDX) for ex in batch]
+    batch = [trim(ex, EOS_IDX) for ex in batch]
     batch = [' '.join([vocab.itos[i] for i in ex]) for ex in batch]
     return batch
-
-
-def concat(x, y):
-    """ concat two batches with padding
-    7 6 7 8 1     7 6 7 8 1      7 6 7 8 7 6 7 8 1 1
-    6 8 5 1 1  +  6 8 5 1 1  =   6 8 5 6 8 5 1 1 1 1
-    8 9 1 1 1     8 9 1 1 1      8 9 8 9 1 1 1 1 1 1
-    """
-    batch_size = x[0].size(0)
-    assert x[0].size(0) == y[0].size(0), 'batch size should be same'
-    max_len_batch = x[0].size(1) + y[0].size(1)
-    concated_tensor = x[0].new_zeros(batch_size, max_len_batch)
-    length = x[0].new_zeros(batch_size)
-    for i in range(batch_size):  # loop for batch
-        x_data, x_len = x[0][i], x[1][i]
-        y_data, y_len = y[0][i], y[1][i]
-        assert (x_data[x_len-1] == EOS_IDX) and (y_data[y_len-1] == EOS_IDX)
-        con = x_data[:x_len-1].tolist() + y_data[:y_len-1].tolist() + [EOS_IDX]
-        pad_size = max_len_batch - len(con)
-        concated = con + ([PAD_IDX] * pad_size)
-        concated_tensor[i] = x_data.new_tensor(concated)
-        length[i] = len(con)
-    return [concated_tensor, length]
-
 
 ## TODO: various experiment with uuid
 #def write_to_file(write_list, msg, data_type, epoch, savedir='experiment'):
