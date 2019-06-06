@@ -43,7 +43,7 @@ if  __name__ == "__main__":
                           dropout=DROPOUT)
     model.load_state_dict(torch.load(path))
     for batch in data.valid_iter:
-        generated = model.generate(batch.merged_hist)
+        generated, lengths = model.generate(batch.merged_hist)
         print(reverse(generated, data.vocab))
         input()
    #################################

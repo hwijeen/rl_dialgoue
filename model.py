@@ -115,11 +115,11 @@ class Decoder(nn.Module):
         return logprobs, attn_weights
 
     def generate(self, memory, final_hidden):
-        B = memory.size(0)
         memory, memory_mask = memory
-        input_token = final_hidden.new_full((B, 1), SOS_IDX)
+        B = memory.size(0)
+        input_token = memory.new_full((B, 1), SOS_IDX, dtype=torch.long)
         hidden = final_hidden
-        generated = torch.empty(B, MAXLEN)
+        generated = memory.new_empty(B, MAXLEN, dtype=torch.long)
         for t in range(MAXLEN):
             input_embedded = self.embedding(input_token)
             dec_output, hidden = self.lstm(input_embedded, hidden)
@@ -129,7 +129,7 @@ class Decoder(nn.Module):
                                                   key_padding_mask=memory_mask)
             logprobs = self.logsoftmax(self.out(attn_output.squeeze()))
             _, generated_token = logprobs.topk(1) # greedy decoding
-            generated[t] = generated_token
+            generated[:, t] = generated_token.squeeze()
             input_token = generated_token
         return tighten(generated)
 

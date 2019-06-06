@@ -49,12 +49,11 @@ def sort_by_length(y, lengths):
     lengths = torch.stack([i[1] for i in sorted_l], dim=0)
     return h, lengths
 
-# DEBUG: edge case - batch wioutout eos token??
 def get_actual_lengths(y):
     # get actual length of a generated batch considering eos
+    B = y.size(0)
     non_zeros = (y == EOS_IDX).nonzero()
-    num_nonzeros = non_zeros.size(0)
-    is_dirty = [False for _ in range(num_nonzeros)]
+    is_dirty = [False for _ in range(B)]
     lengths = []
     for idx in non_zeros:
         i, j = idx[0].item(), idx[1].item()
@@ -68,7 +67,10 @@ def tighten(y):
     pad tokens after EOS and mask hiddens after EOS
     y: (B, MAXLEN+1)
     """
-
+    def replace(y):
+        y[:, -1] = EOS_IDX
+        return y
+    y = replace(y) # some sents don't have eos at all
     lengths = get_actual_lengths(y)
     mask = sequence_mask(lengths)
     y = y[:, :mask.size(1)]  # truncate unnecessarily generated part
